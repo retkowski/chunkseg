@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chunkseg"
+version = "0.1.0"
+description = "Evaluate segmentation quality for audio and video content in a discretized time space"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "Fabian Retkowski", email = "f@retkow.ski"}
+]
+keywords = ["segmentation", "evaluation", "audio", "video", "chapter", "boundary", "temporal"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio :: Analysis",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = [
+    "numpy",
+    "segeval",
+    "nltk",
+]
+
+[project.urls]
+Homepage = "https://github.com/retkowski/chunkseg"
+Repository = "https://github.com/retkowski/chunkseg"
+Issues = "https://github.com/retkowski/chunkseg/issues"
+
+[project.optional-dependencies]
+align = ["alqalign"]
+
+[project.scripts]
+chunkseg = "chunkseg.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
