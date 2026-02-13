@@ -44,7 +44,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--lang",
         default="eng",
-        help="alqalign language code (default: eng).",
+        help="ISO 639-3 language code for forced alignment (default: eng).",
     )
     p.add_argument(
         "--force-alignment",

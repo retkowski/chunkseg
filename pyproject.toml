@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chunkseg"
-version = "0.1.0"
+version = "0.2.0"
 description = "Evaluate segmentation quality for audio and video content in a discretized time space"
 readme = "README.md"
 license = {text = "MIT"}
@@ -32,13 +32,13 @@ dependencies = [
     "nltk",
 ]
 
+[project.optional-dependencies]
+align = ["torch>=2.1.0", "torchaudio>=2.1.0"]
+
 [project.urls]
 Homepage = "https://github.com/retkowski/chunkseg"
 Repository = "https://github.com/retkowski/chunkseg"
 Issues = "https://github.com/retkowski/chunkseg/issues"
-
-[project.optional-dependencies]
-align = ["alqalign"]
 
 [project.scripts]
 chunkseg = "chunkseg.cli:main"

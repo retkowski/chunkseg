@@ -10,7 +10,7 @@ The package supports **direct timestamp evaluation** or **automatic boundary ext
 pip install chunkseg
 ```
 
-For transcript alignment support (requires `alqalign`):
+For transcript alignment support, install with the alignment extra:
 
 ```bash
 pip install chunkseg[align]
@@ -24,7 +24,7 @@ Chunkseg supports three evaluation modes depending on your input format:
 Provide boundary timestamps directly as lists of floats. Use when you already have predicted timestamps (e.g., from a timestamps-only model). **No audio or transcript needed.**
 
 ### 2. Structured Transcript (Forced Alignment)
-Provide a structured transcript without timestamps (e.g., `[CSTART] Title [CEND] text...`). Use when your model produces chapter structure but no timestamps. **Requires audio file and `alqalign`.**
+Provide a structured transcript without timestamps (e.g., `[CSTART] Title [CEND] text...`). Use when your model produces chapter structure but no timestamps. **Requires audio file and `chunkseg[align]`.**
 
 **How it works:** Parse transcript → sentence-tokenize → align to audio → derive boundary timestamps from aligned sections.
 
@@ -33,7 +33,7 @@ Provide a structured transcript with embedded timestamps (e.g., `[CSTART] 1:23:4
 
 **Two modes:**
 - **Use provided timestamps** (default): Fast, no alignment needed, no audio required
-- **Force alignment** (`--force-alignment`): Ignores timestamps, uses audio alignment instead (requires audio + `alqalign`)
+- **Force alignment** (`--force-alignment`): Ignores timestamps, uses audio alignment instead (requires audio + `chunkseg[align]`)
 
 ## Quick Reference
 
@@ -242,8 +242,8 @@ Supported `timestamp_format` values:
 - `segeval`
 - `nltk`
 
-**Optional:**
-- `alqalign` — for transcript alignment (install with `pip install chunkseg[align]`)
+**Optional (for transcript alignment):**
+- `torch` + `torchaudio` — install via `pip install chunkseg[align]`
 
 ## License
 

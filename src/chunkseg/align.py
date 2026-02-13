@@ -1,23 +1,165 @@
-"""Alignment wrapper for deriving timestamps from transcript text via alqalign."""
+"""Alignment wrapper for deriving timestamps from transcript text via torchaudio MMS_FA."""
 
 from __future__ import annotations
 
-import os
 import re
 import sys
-import tempfile
 import traceback
 
 
-def _get_alq_align():
+# Module-level cache for torchaudio components
+_model = None
+_tokenizer = None
+_aligner = None
+_device = None
+_sample_rate = None
+_dictionary = None
+
+
+def _get_torchaudio_components():
+    """Lazy-load and cache torchaudio MMS_FA model, tokenizer, and aligner."""
+    global _model, _tokenizer, _aligner, _device, _sample_rate, _dictionary
+    if _model is not None:
+        return _model, _tokenizer, _aligner, _device, _sample_rate, _dictionary
+
     try:
-        from alqalign.app import align as alq_align
-        return alq_align
+        import torch
+        import torchaudio  # noqa: F401
+        from torchaudio.pipelines import MMS_FA as bundle
     except ImportError:
         raise ImportError(
-            "alqalign is required for transcript alignment but is not installed. "
-            "Install it with: pip install chunkseg[align]"
+            "torch and torchaudio are required for transcript alignment but "
+            "are not installed. Install them with: pip install torch torchaudio"
         )
+
+    _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    _sample_rate = bundle.sample_rate  # 16000
+    _model = bundle.get_model().to(_device)
+    _model.eval()
+    _tokenizer = bundle.get_tokenizer()
+    _aligner = bundle.get_aligner()
+    _dictionary = bundle.get_dict()
+
+    return _model, _tokenizer, _aligner, _device, _sample_rate, _dictionary
+
+
+def _normalize_text_for_alignment(text: str) -> str:
+    """Normalize text for MMS forced alignment."""
+    text = text.lower()
+    text = text.replace("\u2019", "'")  # right single quote -> apostrophe
+    text = re.sub(r"[^a-z' ]", " ", text)
+    text = re.sub(r" +", " ", text)
+    return text.strip()
+
+
+def _load_audio(audio_path: str, target_sample_rate: int, device):
+    """Load audio file, resample to target rate, and convert to mono."""
+    import torchaudio
+
+    waveform, sample_rate = torchaudio.load(audio_path)
+
+    if waveform.shape[0] > 1:
+        waveform = waveform.mean(dim=0, keepdim=True)
+
+    if sample_rate != target_sample_rate:
+        waveform = torchaudio.functional.resample(
+            waveform, orig_freq=sample_rate, new_freq=target_sample_rate
+        )
+
+    return waveform.to(device)
+
+
+def _compute_emissions(model, waveform, device):
+    """Compute emission log-probabilities from the acoustic model."""
+    import torch
+
+    try:
+        with torch.inference_mode():
+            emission, _ = model(waveform)
+        return emission
+    except torch.cuda.OutOfMemoryError:
+        sys.stderr.write(
+            "[WARN] CUDA out of memory for emission computation, "
+            "falling back to CPU.\n"
+        )
+        model_cpu = model.cpu()
+        waveform_cpu = waveform.cpu()
+        with torch.inference_mode():
+            emission, _ = model_cpu(waveform_cpu)
+        model.to(device)
+        return emission
+
+
+def _torchaudio_align(
+    audio_path: str,
+    sentences: list[str],
+    lang: str,
+) -> list[dict]:
+    """Perform forced alignment using torchaudio MMS_FA.
+
+    Args:
+        audio_path: Path to audio file.
+        sentences: List of sentence text strings.
+        lang: ISO 639-3 language code.
+
+    Returns:
+        List of dicts with ``"start"`` and ``"end"`` keys (seconds),
+        one per input sentence.
+    """
+    import torch  # noqa: F401
+
+    model, tokenizer, aligner, device, sample_rate, dictionary = (
+        _get_torchaudio_components()
+    )
+
+    waveform = _load_audio(audio_path, sample_rate, device)
+    emission = _compute_emissions(model, waveform, device)
+    num_frames = emission.shape[1]
+
+    # Frame-to-time conversion factor
+    ratio = waveform.shape[1] / num_frames
+
+    # Normalize and tokenize all sentences as a flat word list, tracking sentence boundaries
+    all_words: list[str] = []
+    sentence_word_counts: list[int] = []
+
+    for sent_text in sentences:
+        normalized = _normalize_text_for_alignment(sent_text)
+        words = normalized.split()
+
+        # Filter out words containing characters not in the dictionary
+        valid_words = [
+            w for w in words if all(c in dictionary for c in w)
+        ]
+
+        all_words.extend(valid_words)
+        sentence_word_counts.append(len(valid_words))
+
+    if not all_words:
+        return [{"start": 0.0, "end": 0.0} for _ in sentences]
+
+    tokens = tokenizer(all_words)
+    token_spans = aligner(emission[0], tokens)
+
+    # Aggregate token-level spans to sentence-level timestamps
+    results: list[dict] = []
+    word_idx = 0
+    for word_count in sentence_word_counts:
+        if word_count == 0:
+            prev_end = results[-1]["end"] if results else 0.0
+            results.append({"start": prev_end, "end": prev_end})
+        else:
+            sent_spans = token_spans[word_idx : word_idx + word_count]
+            first_span = sent_spans[0][0]
+            last_span = sent_spans[-1][-1]
+
+            start_time = float(first_span.start * ratio / sample_rate)
+            end_time = float(last_span.end * ratio / sample_rate)
+
+            results.append({"start": start_time, "end": end_time})
+        word_idx += word_count
+
+    return results
 
 
 def _is_punct_only(text: str) -> bool:
@@ -27,15 +169,6 @@ def _is_punct_only(text: str) -> bool:
     if not stripped:
         return True
     return re.search(r"\w", stripped) is None
-
-
-def write_temp_text(lines: list[str]) -> str:
-    """Write a list of text lines to a temporary file and return the path."""
-    fd, path = tempfile.mkstemp(suffix=".txt", prefix="chunkseg_", text=True)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        for line in lines:
-            f.write((line or "").strip() + "\n")
-    return path
 
 
 def update_timestamps_from_alignment(
@@ -57,130 +190,32 @@ def align_sentences(
     sentences: list[dict],
     lang: str,
 ) -> list[dict] | None:
-    """Align sentence timestamps against an audio file using alqalign.
+    """Align sentence timestamps against an audio file using torchaudio MMS_FA.
 
     Args:
-        audio_path: Path to WAV audio file.
+        audio_path: Path to audio file (WAV, MP3, FLAC, etc.).
         sentences: List of dicts, each with at least a ``"text"`` key.
-        lang: alqalign language code (e.g. ``"eng"``).
+        lang: ISO 639-3 language code (e.g. ``"eng"``).
 
     Returns:
         Updated sentence dicts with ``start``/``end`` timestamps, or
         ``None`` if alignment could not be completed.
     """
-    alq_align = _get_alq_align()
-
     if not sentences:
         return sentences
 
-    remaining = list(sentences)
-    used_trim_last = False
-    exp_step = 1
-    max_step = 128
+    text_lines = [s.get("text", "").replace("\n", " ") for s in sentences]
 
-    while True:
-        tmp_txt_path = None
-        try:
-            text_lines = [s.get("text", "").replace("\n", " ") for s in remaining]
-            tmp_txt_path = write_temp_text(text_lines)
-            segments = alq_align(audio_path, tmp_txt_path, lang)
+    try:
+        segments = _torchaudio_align(audio_path, text_lines, lang)
+    except Exception as e:
+        sys.stderr.write(
+            f"[WARN] Alignment failed for {audio_path}: {e}\n"
+            f"{traceback.format_exc()}\n"
+        )
+        return None
 
-            if not isinstance(segments, list) or not all(
-                isinstance(x, dict) for x in segments
-            ):
-                sys.stderr.write(
-                    "[WARN] Unexpected alqalign output; keeping original timestamps.\n"
-                )
-                return None
-
-            if len(segments) != len(remaining):
-                # Try to explain mismatch via punctuation-only sentences
-                punct_positions = [
-                    i
-                    for i, s in enumerate(remaining)
-                    if _is_punct_only(str(s.get("text", "")))
-                ]
-
-                if (
-                    len(segments) + len(punct_positions) == len(remaining)
-                    and len(segments) > 0
-                ):
-                    keep_indices = [
-                        i for i in range(len(remaining)) if i not in punct_positions
-                    ]
-                    kept_sentences = [remaining[i] for i in keep_indices]
-                    aligned_kept = update_timestamps_from_alignment(
-                        kept_sentences, segments
-                    )
-                    aligned_map = {
-                        idx: aligned_kept[j] for j, idx in enumerate(keep_indices)
-                    }
-
-                    aligned_full = []
-                    prev_end = (
-                        float(aligned_kept[0].get("start", 0.0))
-                        if aligned_kept
-                        else 0.0
-                    )
-                    for i, s in enumerate(remaining):
-                        if i in aligned_map:
-                            s2 = aligned_map[i]
-                            aligned_full.append(s2)
-                            prev_end = float(s2.get("end", prev_end))
-                        else:
-                            s2 = dict(s)
-                            s2["start"] = prev_end
-                            s2["end"] = prev_end
-                            aligned_full.append(s2)
-                    return aligned_full
-
-                sys.stderr.write(
-                    f"[WARN] Segment count mismatch for {os.path.basename(audio_path)}: "
-                    f"{len(segments)} (aligned) vs {len(remaining)} (sentences).\n"
-                )
-                return None
-
-            return update_timestamps_from_alignment(remaining, segments)
-
-        except FileNotFoundError:
-            if len(remaining) <= 1:
-                return None
-
-            if not used_trim_last:
-                n = len(remaining)
-                remaining = remaining[:-1]
-                if remaining:
-                    pivot_text = remaining[-1].get("text", "")
-                    remaining = [
-                        s
-                        for s in remaining[:-1]
-                        if s.get("text", "") != pivot_text
-                    ] + [remaining[-1]]
-                used_trim_last = True
-                if not remaining:
-                    return None
-            else:
-                step = min(exp_step, max_step)
-                trim_n = min(step, len(remaining) - 1)
-                remaining = remaining[:-trim_n]
-                exp_step = min(step * 2, max_step)
-                if len(remaining) <= 1:
-                    pass  # one more attempt
-            continue
-
-        except Exception as e:
-            sys.stderr.write(
-                f"[WARN] Alignment failed for {audio_path}: {e}\n"
-                f"{traceback.format_exc()}\n"
-            )
-            return None
-
-        finally:
-            if tmp_txt_path and os.path.exists(tmp_txt_path):
-                try:
-                    os.remove(tmp_txt_path)
-                except Exception:
-                    pass
+    return update_timestamps_from_alignment(sentences, segments)
 
 
 def sections_to_boundary_timestamps(

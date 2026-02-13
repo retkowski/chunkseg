@@ -53,7 +53,7 @@ def evaluate(
         timestamp_format: Timestamp format for ``"custom_ts"`` (default: ``"H:MM:SS"``).
             Supported: ``"HH:MM:SS"``, ``"H:MM:SS"``, ``"MM:SS"``, ``"M:SS"``, or
             a custom regex with named groups ``h``/``m``/``s``.
-        lang: alqalign language code (default ``"eng"``).
+        lang: ISO 639-3 language code for forced alignment (default ``"eng"``).
         force_alignment: If True, ignore embedded timestamps and derive them from
             audio alignment instead. Requires audio path. (default False).
 
@@ -109,7 +109,7 @@ def evaluate_batch(
         format: Parser preset override (applied to all transcript samples).
         custom_pattern: Regex pattern when *format* is ``"custom"`` or ``"custom_ts"``.
         timestamp_format: Timestamp format for ``"custom_ts"`` (default: ``"H:MM:SS"``).
-        lang: alqalign language code (default ``"eng"``).
+        lang: ISO 639-3 language code for forced alignment (default ``"eng"``).
         num_bootstrap: Number of bootstrap iterations for CIs.
         force_alignment: If True, ignore embedded timestamps and derive them from
             audio alignment instead. Requires audio paths in samples. (default False).
