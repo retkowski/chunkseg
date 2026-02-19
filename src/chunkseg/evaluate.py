@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from .core import build_target_sequence
-from .metrics import aggregate_metrics, compute_metrics, compute_wer
+from .metrics import aggregate_metrics, collar_boundary_f1, compute_metrics, compute_wer
 from .parsers import parse_transcript
 
 
@@ -25,6 +25,7 @@ def evaluate(
     reference_titles: list[tuple[str, float]] | None = None,
     hyp_titles: list[tuple[str, float]] | None = None,
     tolerance: float = 5.0,
+    collar: float = 3.0,
 ) -> dict:
     """Evaluate a single segmentation hypothesis against a reference.
 
@@ -63,9 +64,15 @@ def evaluate(
         reference_transcript: Reference transcript text for WER computation.
             When provided with a string hypothesis, WER is automatically computed.
         reference_titles: Reference titles as ``(title, start_seconds)`` pairs
-            for BERTScore title evaluation. When provided with a string hypothesis
-            whose format includes titles and timestamps, title metrics are computed.
-        tolerance: Time tolerance in seconds for TM-BS matching (default 5.0).
+            for title evaluation (BERTScore + ROUGE-L). When provided with a
+            string hypothesis whose format includes titles and timestamps, title
+            metrics are computed automatically.
+        hyp_titles: Hypothesis titles as ``(title, start_seconds)`` pairs.
+            If ``None`` and *hypothesis* is a string with titles, they are
+            extracted from the parsed transcript automatically.
+        tolerance: Time tolerance in seconds for temporally-matched title
+            scoring (TM-BS / TM-RL, default 5.0).
+        collar: Collar size in seconds for collar-based boundary F1 (default 3.0).
 
     Returns:
         Dict mapping metric names to float values.
@@ -90,6 +97,9 @@ def evaluate(
     hyp_seq = hyp_seq[:min_len]
 
     metrics = compute_metrics(hyp_seq, ref_seq)
+
+    # Collar-based boundary F1 (always computed from raw timestamps)
+    metrics.update(collar_boundary_f1(reference, hyp_timestamps, collar))
 
     # Compute WER if reference transcript is provided
     if reference_transcript is not None and isinstance(hypothesis, str):
@@ -132,6 +142,7 @@ def evaluate_batch(
     wer: bool = False,
     titles: bool = False,
     tolerance: float = 5.0,
+    collar: float = 3.0,
 ) -> dict:
     """Evaluate a batch of samples and return aggregated metrics.
 
@@ -155,9 +166,10 @@ def evaluate_batch(
             audio alignment instead. Requires audio paths in samples. (default False).
         wer: If True, compute Word Error Rate. Each sample must include a
             ``reference_transcript`` field. (default False).
-        titles: If True, compute BERTScore title metrics (TM-BS and GC-BS).
-            Each sample must include a ``reference_titles`` field with
-            ``[[title, start_seconds], ...]`` entries. (default False).
+        titles: If True, compute title metrics: BERTScore (TM-BS, GC-BS) and
+            ROUGE-L (TM-RL, GC-RL). Each sample must include a
+            ``reference_titles`` field with ``[[title, start_seconds], ...]``
+            entries. (default False).
         tolerance: Time tolerance in seconds for TM-BS matching (default 5.0).
 
     Returns:
@@ -197,6 +209,7 @@ def evaluate_batch(
             reference_titles=ref_titles,
             hyp_titles=sample_hyp_titles,
             tolerance=tolerance,
+            collar=collar,
         )
         if result:
             all_metrics.append(result)

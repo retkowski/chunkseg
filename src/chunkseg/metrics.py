@@ -110,6 +110,56 @@ def compute_metrics(pred: np.ndarray, ref: np.ndarray) -> dict:
     return metrics
 
 
+def collar_boundary_f1(
+    ref_boundaries: list[float],
+    pred_boundaries: list[float],
+    collar: float,
+) -> dict:
+    """Collar-based boundary F1 in continuous time.
+
+    A predicted boundary is a TP if it falls within ±collar seconds of a
+    reference boundary, with greedy 1-to-1 matching (closest pair first).
+
+    Args:
+        ref_boundaries: Reference boundary timestamps in seconds.
+        pred_boundaries: Predicted boundary timestamps in seconds.
+        collar: Tolerance window in seconds.
+
+    Returns:
+        Dict with ``collar_precision``, ``collar_recall``, ``collar_f1``.
+    """
+    n_ref = len(ref_boundaries)
+    n_pred = len(pred_boundaries)
+
+    if n_ref == 0 and n_pred == 0:
+        return {"collar_precision": 1.0, "collar_recall": 1.0, "collar_f1": 1.0}
+    if n_ref == 0 or n_pred == 0:
+        return {"collar_precision": 0.0, "collar_recall": 0.0, "collar_f1": 0.0}
+
+    pairs = []
+    for i, r in enumerate(ref_boundaries):
+        for j, p in enumerate(pred_boundaries):
+            dist = abs(r - p)
+            if dist <= collar:
+                pairs.append((dist, i, j))
+    pairs.sort()
+
+    matched_ref: set[int] = set()
+    matched_pred: set[int] = set()
+    tp = 0
+    for dist, i, j in pairs:
+        if i not in matched_ref and j not in matched_pred:
+            matched_ref.add(i)
+            matched_pred.add(j)
+            tp += 1
+
+    precision = tp / n_pred
+    recall = tp / n_ref
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+
+    return {"collar_precision": precision, "collar_recall": recall, "collar_f1": f1}
+
+
 def compute_wer(hypothesis_text: str, reference_text: str) -> dict:
     """Compute WER components for a single hypothesis/reference pair.
 

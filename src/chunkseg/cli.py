@@ -60,14 +60,21 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--titles",
         action="store_true",
-        help="Compute BERTScore title metrics (TM-BS and GC-BS). "
-        "Requires 'reference_titles' field in input JSONL.",
+        help="Compute title metrics: BERTScore (TM-BS, GC-BS) and ROUGE-L (TM-RL, GC-RL). "
+        "Requires 'reference_titles' field in input JSONL. "
+        "Install chunkseg[titles] for the required dependencies.",
     )
     p.add_argument(
         "--tolerance",
         type=float,
         default=5.0,
         help="Time tolerance in seconds for TM-BS title matching (default: 5.0).",
+    )
+    p.add_argument(
+        "--collar",
+        type=float,
+        default=3.0,
+        help="Collar size in seconds for boundary F1 (default: 3.0).",
     )
     p.add_argument(
         "--output",
@@ -125,6 +132,7 @@ def main(argv: list[str] | None = None) -> None:
         wer=args.wer,
         titles=args.titles,
         tolerance=args.tolerance,
+        collar=args.collar,
     )
 
     if args.output:
