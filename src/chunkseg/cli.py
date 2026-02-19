@@ -53,6 +53,23 @@ def _build_parser() -> argparse.ArgumentParser:
         "Ignores provided timestamps and derives them from audio alignment instead.",
     )
     p.add_argument(
+        "--wer",
+        action="store_true",
+        help="Compute Word Error Rate. Requires 'reference_transcript' field in input JSONL.",
+    )
+    p.add_argument(
+        "--titles",
+        action="store_true",
+        help="Compute BERTScore title metrics (TM-BS and GC-BS). "
+        "Requires 'reference_titles' field in input JSONL.",
+    )
+    p.add_argument(
+        "--tolerance",
+        type=float,
+        default=5.0,
+        help="Time tolerance in seconds for TM-BS title matching (default: 5.0).",
+    )
+    p.add_argument(
         "--output",
         default=None,
         help="Write aggregated results to a JSON file instead of stdout.",
@@ -105,6 +122,9 @@ def main(argv: list[str] | None = None) -> None:
         lang=args.lang,
         num_bootstrap=args.num_bootstrap,
         force_alignment=args.force_alignment,
+        wer=args.wer,
+        titles=args.titles,
+        tolerance=args.tolerance,
     )
 
     if args.output:

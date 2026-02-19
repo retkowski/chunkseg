@@ -10,7 +10,19 @@ from collections import defaultdict
 
 import numpy as np
 import segeval
+import jiwer as jw
 from nltk.metrics.segmentation import ghd
+
+
+_WER_TRANSFORM = jw.Compose([
+    jw.ToLowerCase(),
+    jw.ExpandCommonEnglishContractions(),
+    jw.RemoveKaldiNonWords(),
+    jw.RemoveWhiteSpace(replace_by_space=True),
+    jw.RemoveMultipleSpaces(),
+    jw.Strip(),
+    jw.ReduceToListOfListOfWords(),
+])
 
 
 def _binary_confusion(pred: np.ndarray, ref: np.ndarray):
@@ -98,6 +110,26 @@ def compute_metrics(pred: np.ndarray, ref: np.ndarray) -> dict:
     return metrics
 
 
+def compute_wer(hypothesis_text: str, reference_text: str) -> dict:
+    """Compute WER components for a single hypothesis/reference pair.
+
+    Returns dict with ``wer`` (per-sample), ``_wer_errors`` and
+    ``_wer_ref_len`` (for micro-WER aggregation across samples).
+    """
+    out = jw.process_words(
+        reference_text, hypothesis_text,
+        reference_transform=_WER_TRANSFORM,
+        hypothesis_transform=_WER_TRANSFORM,
+    )
+    errors = out.substitutions + out.deletions + out.insertions
+    ref_len = errors + out.hits
+    return {
+        "wer": out.wer if ref_len > 0 else 0.0,
+        "_wer_errors": errors,
+        "_wer_ref_len": ref_len,
+    }
+
+
 def bootstrap_confidence_interval(
     data,
     statistic_func=np.mean,
@@ -169,8 +201,22 @@ def aggregate_metrics(
     stds: dict[str, float] = {}
 
     data_stats = {"num_segments", "reference/num_segments"}
+    internal_keys = {"_wer_errors", "_wer_ref_len", "wer"}
+
+    if "_wer_errors" in collected and "_wer_ref_len" in collected:
+        total_errors = sum(collected["_wer_errors"])
+        total_ref_len = sum(collected["_wer_ref_len"])
+        micro_wer = total_errors / total_ref_len if total_ref_len > 0 else 0.0
+        result["wer"] = {
+            "mean": micro_wer,
+            "std": 0.0,
+            "ci_lower": micro_wer,
+            "ci_upper": micro_wer,
+        }
 
     for name, values in collected.items():
+        if name in internal_keys:
+            continue
         arr = np.array(values)
         mean = float(np.mean(arr))
         if name in data_stats:

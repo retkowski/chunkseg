@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from .core import build_target_sequence
-from .metrics import aggregate_metrics, compute_metrics
+from .metrics import aggregate_metrics, compute_metrics, compute_wer
 from .parsers import parse_transcript
 
 
@@ -21,6 +21,10 @@ def evaluate(
     timestamp_format: str | None = None,
     lang: str = "eng",
     force_alignment: bool = False,
+    reference_transcript: str | None = None,
+    reference_titles: list[tuple[str, float]] | None = None,
+    hyp_titles: list[tuple[str, float]] | None = None,
+    tolerance: float = 5.0,
 ) -> dict:
     """Evaluate a single segmentation hypothesis against a reference.
 
@@ -56,6 +60,12 @@ def evaluate(
         lang: ISO 639-3 language code for forced alignment (default ``"eng"``).
         force_alignment: If True, ignore embedded timestamps and derive them from
             audio alignment instead. Requires audio path. (default False).
+        reference_transcript: Reference transcript text for WER computation.
+            When provided with a string hypothesis, WER is automatically computed.
+        reference_titles: Reference titles as ``(title, start_seconds)`` pairs
+            for BERTScore title evaluation. When provided with a string hypothesis
+            whose format includes titles and timestamps, title metrics are computed.
+        tolerance: Time tolerance in seconds for TM-BS matching (default 5.0).
 
     Returns:
         Dict mapping metric names to float values.
@@ -79,7 +89,34 @@ def evaluate(
     ref_seq = ref_seq[:min_len]
     hyp_seq = hyp_seq[:min_len]
 
-    return compute_metrics(hyp_seq, ref_seq)
+    metrics = compute_metrics(hyp_seq, ref_seq)
+
+    # Compute WER if reference transcript is provided
+    if reference_transcript is not None and isinstance(hypothesis, str):
+        hyp_text = _extract_hypothesis_text(
+            hypothesis, format=format,
+            custom_pattern=custom_pattern,
+            timestamp_format=timestamp_format,
+        )
+        if hyp_text:
+            metrics.update(compute_wer(hyp_text, reference_transcript))
+
+    # Compute BERTScore title metrics if reference titles are provided
+    if reference_titles is not None:
+        _hyp_titles = hyp_titles
+        if _hyp_titles is None and isinstance(hypothesis, str):
+            _hyp_titles = _extract_hypothesis_titles(
+                hypothesis, format=format,
+                custom_pattern=custom_pattern,
+                timestamp_format=timestamp_format,
+            )
+        if _hyp_titles:
+            from .titles import compute_title_scores
+            metrics.update(compute_title_scores(
+                _hyp_titles, reference_titles, tolerance=tolerance,
+            ))
+
+    return metrics
 
 
 def evaluate_batch(
@@ -92,6 +129,9 @@ def evaluate_batch(
     lang: str = "eng",
     num_bootstrap: int = 100,
     force_alignment: bool = False,
+    wer: bool = False,
+    titles: bool = False,
+    tolerance: float = 5.0,
 ) -> dict:
     """Evaluate a batch of samples and return aggregated metrics.
 
@@ -113,6 +153,12 @@ def evaluate_batch(
         num_bootstrap: Number of bootstrap iterations for CIs.
         force_alignment: If True, ignore embedded timestamps and derive them from
             audio alignment instead. Requires audio paths in samples. (default False).
+        wer: If True, compute Word Error Rate. Each sample must include a
+            ``reference_transcript`` field. (default False).
+        titles: If True, compute BERTScore title metrics (TM-BS and GC-BS).
+            Each sample must include a ``reference_titles`` field with
+            ``[[title, start_seconds], ...]`` entries. (default False).
+        tolerance: Time tolerance in seconds for TM-BS matching (default 5.0).
 
     Returns:
         Dict mapping metric names to dicts of
@@ -123,6 +169,18 @@ def evaluate_batch(
 
     for sample in samples:
         sample_format = format or sample.get("format")
+
+        ref_transcript = sample.get("reference_transcript") if wer else None
+
+        ref_titles = None
+        sample_hyp_titles = None
+        if titles:
+            raw = sample.get("reference_titles")
+            if raw is not None:
+                ref_titles = [(t, s) for t, s in raw]
+            raw_hyp = sample.get("hyp_titles")
+            if raw_hyp is not None:
+                sample_hyp_titles = [(t, s) for t, s in raw_hyp]
 
         result = evaluate(
             hypothesis=sample["hypothesis"],
@@ -135,11 +193,57 @@ def evaluate_batch(
             timestamp_format=timestamp_format,
             lang=lang,
             force_alignment=force_alignment,
+            reference_transcript=ref_transcript,
+            reference_titles=ref_titles,
+            hyp_titles=sample_hyp_titles,
+            tolerance=tolerance,
         )
         if result:
             all_metrics.append(result)
 
     return aggregate_metrics(all_metrics, num_iterations=num_bootstrap)
+
+
+def _extract_hypothesis_text(
+    text: str,
+    *,
+    format: str | None,
+    custom_pattern: str | None,
+    timestamp_format: str | None,
+) -> str:
+    """Parse structured transcript and return flattened plain text."""
+    if format is None:
+        return text
+    result = parse_transcript(
+        text, format,
+        custom_pattern=custom_pattern,
+        timestamp_format=timestamp_format,
+    )
+    return " ".join(
+        sent for section in result.sections for sent in section
+    )
+
+
+def _extract_hypothesis_titles(
+    text: str,
+    *,
+    format: str | None,
+    custom_pattern: str | None,
+    timestamp_format: str | None,
+) -> list[tuple[str, float]]:
+    """Parse structured transcript and return (title, start_time) pairs."""
+    if format is None:
+        return []
+    result = parse_transcript(
+        text, format,
+        custom_pattern=custom_pattern,
+        timestamp_format=timestamp_format,
+    )
+    if not result.titles or not result.timestamps:
+        return []
+    # Zip titles with timestamps (use min length in case of mismatch)
+    n = min(len(result.titles), len(result.timestamps))
+    return list(zip(result.titles[:n], result.timestamps[:n]))
 
 
 def _timestamps_from_transcript(
