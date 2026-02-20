@@ -20,6 +20,7 @@ def evaluate(
     custom_pattern: str | None = None,
     timestamp_format: str | None = None,
     lang: str = "eng",
+    fa_backend: str = "mms_fa",
     force_alignment: bool = False,
     reference_transcript: str | None = None,
     reference_titles: list[tuple[str, float]] | None = None,
@@ -59,6 +60,10 @@ def evaluate(
             Supported: ``"HH:MM:SS"``, ``"H:MM:SS"``, ``"MM:SS"``, ``"M:SS"``, or
             a custom regex with named groups ``h``/``m``/``s``.
         lang: ISO 639-3 language code for forced alignment (default ``"eng"``).
+        fa_backend: Forced alignment backend: ``"mms_fa"`` (default, requires
+            ``chunkseg[align]``) or ``"alqalign"`` (see
+            https://github.com/xinjli/alqalign; includes exponential trimming
+            for long transcripts).
         force_alignment: If True, ignore embedded timestamps and derive them from
             audio alignment instead. Requires audio path. (default False).
         reference_transcript: Reference transcript text for WER computation.
@@ -81,10 +86,14 @@ def evaluate(
         hyp_timestamps = _timestamps_from_transcript(
             hypothesis, audio=audio, format=format,
             custom_pattern=custom_pattern, timestamp_format=timestamp_format,
-            lang=lang, force_alignment=force_alignment,
+            lang=lang, fa_backend=fa_backend, force_alignment=force_alignment,
         )
     else:
         hyp_timestamps = list(hypothesis)
+
+    # 0.0 is never a valid inter-section boundary
+    reference = [t for t in reference if t > 0]
+    hyp_timestamps = [t for t in hyp_timestamps if t > 0]
 
     ref_seq = build_target_sequence(duration, reference, chunk_size)
     hyp_seq = build_target_sequence(duration, hyp_timestamps, chunk_size)
@@ -119,6 +128,7 @@ def evaluate(
                 hypothesis, format=format,
                 custom_pattern=custom_pattern,
                 timestamp_format=timestamp_format,
+                hyp_timestamps=hyp_timestamps,
             )
         if _hyp_titles:
             from .titles import compute_title_scores
@@ -137,6 +147,7 @@ def evaluate_batch(
     custom_pattern: str | None = None,
     timestamp_format: str | None = None,
     lang: str = "eng",
+    fa_backend: str = "mms_fa",
     num_bootstrap: int = 100,
     force_alignment: bool = False,
     wer: bool = False,
@@ -161,6 +172,8 @@ def evaluate_batch(
         custom_pattern: Regex pattern when *format* is ``"custom"`` or ``"custom_ts"``.
         timestamp_format: Timestamp format for ``"custom_ts"`` (default: ``"H:MM:SS"``).
         lang: ISO 639-3 language code for forced alignment (default ``"eng"``).
+        fa_backend: Forced alignment backend: ``"mms_fa"`` (default) or
+            ``"alqalign"`` (see https://github.com/xinjli/alqalign; includes trimming).
         num_bootstrap: Number of bootstrap iterations for CIs.
         force_alignment: If True, ignore embedded timestamps and derive them from
             audio alignment instead. Requires audio paths in samples. (default False).
@@ -204,6 +217,7 @@ def evaluate_batch(
             custom_pattern=custom_pattern,
             timestamp_format=timestamp_format,
             lang=lang,
+            fa_backend=fa_backend,
             force_alignment=force_alignment,
             reference_transcript=ref_transcript,
             reference_titles=ref_titles,
@@ -243,6 +257,7 @@ def _extract_hypothesis_titles(
     format: str | None,
     custom_pattern: str | None,
     timestamp_format: str | None,
+    hyp_timestamps: list[float] | None = None,
 ) -> list[tuple[str, float]]:
     """Parse structured transcript and return (title, start_time) pairs."""
     if format is None:
@@ -252,11 +267,17 @@ def _extract_hypothesis_titles(
         custom_pattern=custom_pattern,
         timestamp_format=timestamp_format,
     )
-    if not result.titles or not result.timestamps:
+    if not result.titles:
         return []
-    # Zip titles with timestamps (use min length in case of mismatch)
-    n = min(len(result.titles), len(result.timestamps))
-    return list(zip(result.titles[:n], result.timestamps[:n]))
+    # Build section start times using the same timestamps as segmentation.
+    if hyp_timestamps is not None:
+        section_starts = [0.0] + list(hyp_timestamps)
+    elif result.timestamps:
+        section_starts = list(result.timestamps)
+    else:
+        return []
+    n = min(len(result.titles), len(section_starts))
+    return list(zip(result.titles[:n], section_starts[:n]))
 
 
 def _timestamps_from_transcript(
@@ -267,6 +288,7 @@ def _timestamps_from_transcript(
     custom_pattern: str | None,
     timestamp_format: str | None,
     lang: str,
+    fa_backend: str = "mms_fa",
     force_alignment: bool = False,
 ) -> list[float]:
     """Parse transcript text and derive boundary timestamps.
@@ -315,7 +337,7 @@ def _timestamps_from_transcript(
         for sent in section:
             sentence_dicts.append({"text": sent})
 
-    aligned = align_sentences(audio, sentence_dicts, lang)
+    aligned = align_sentences(audio, sentence_dicts, lang, backend=fa_backend)
     if aligned is None:
         return []
 

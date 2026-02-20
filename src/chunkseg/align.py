@@ -1,13 +1,24 @@
-"""Alignment wrapper for deriving timestamps from transcript text via torchaudio MMS_FA."""
+"""Alignment wrapper for deriving timestamps from transcript text.
+
+Supports two backends:
+- ``"mms_fa"`` (default): torchaudio MMS_FA — no extra install required beyond
+  ``chunkseg[align]``. Includes exponential trimming: the acoustic model runs
+  once; only the cheap CTC alignment step is retried with fewer sentences.
+- ``"alqalign"``: alqalign — see https://github.com/xinjli/alqalign for
+  installation. Includes exponential trimming via re-running full alignment.
+"""
 
 from __future__ import annotations
 
+import os
 import re
 import sys
+import tempfile
 import traceback
 
 
-# Module-level cache for torchaudio components
+# ── MMS_FA (torchaudio) ───────────────────────────────────────────────────────
+
 _model = None
 _tokenizer = None
 _aligner = None
@@ -79,69 +90,41 @@ def _compute_emissions(model, waveform, device):
         return emission
     except torch.cuda.OutOfMemoryError:
         sys.stderr.write(
-            "[WARN] CUDA out of memory for emission computation, "
-            "falling back to CPU.\n"
+            "[WARN] CUDA out of memory for emission computation — "
+            "audio too long for GPU. Skipping alignment.\n"
         )
-        model_cpu = model.cpu()
-        waveform_cpu = waveform.cpu()
-        with torch.inference_mode():
-            emission, _ = model_cpu(waveform_cpu)
-        model.to(device)
-        return emission
+        raise
 
 
-def _torchaudio_align(
-    audio_path: str,
-    sentences: list[str],
-    lang: str,
+def _align_text_to_emission(
+    emission,
+    waveform,
+    text_lines: list[str],
+    sample_rate: int,
+    dictionary,
+    tokenizer,
+    aligner,
 ) -> list[dict]:
-    """Perform forced alignment using torchaudio MMS_FA.
-
-    Args:
-        audio_path: Path to audio file.
-        sentences: List of sentence text strings.
-        lang: ISO 639-3 language code.
-
-    Returns:
-        List of dicts with ``"start"`` and ``"end"`` keys (seconds),
-        one per input sentence.
-    """
-    import torch  # noqa: F401
-
-    model, tokenizer, aligner, device, sample_rate, dictionary = (
-        _get_torchaudio_components()
-    )
-
-    waveform = _load_audio(audio_path, sample_rate, device)
-    emission = _compute_emissions(model, waveform, device)
+    """Align text lines against a precomputed emission."""
     num_frames = emission.shape[1]
-
-    # Frame-to-time conversion factor
     ratio = waveform.shape[1] / num_frames
 
-    # Normalize and tokenize all sentences as a flat word list, tracking sentence boundaries
     all_words: list[str] = []
     sentence_word_counts: list[int] = []
 
-    for sent_text in sentences:
+    for sent_text in text_lines:
         normalized = _normalize_text_for_alignment(sent_text)
         words = normalized.split()
-
-        # Filter out words containing characters not in the dictionary
-        valid_words = [
-            w for w in words if all(c in dictionary for c in w)
-        ]
-
+        valid_words = [w for w in words if all(c in dictionary for c in w)]
         all_words.extend(valid_words)
         sentence_word_counts.append(len(valid_words))
 
     if not all_words:
-        return [{"start": 0.0, "end": 0.0} for _ in sentences]
+        return [{"start": 0.0, "end": 0.0} for _ in text_lines]
 
     tokens = tokenizer(all_words)
-    token_spans = aligner(emission[0], tokens)
+    token_spans = aligner(emission[0], tokens)  # raises RuntimeError on CTC failure
 
-    # Aggregate token-level spans to sentence-level timestamps
     results: list[dict] = []
     word_idx = 0
     for word_count in sentence_word_counts:
@@ -152,15 +135,223 @@ def _torchaudio_align(
             sent_spans = token_spans[word_idx : word_idx + word_count]
             first_span = sent_spans[0][0]
             last_span = sent_spans[-1][-1]
-
             start_time = float(first_span.start * ratio / sample_rate)
             end_time = float(last_span.end * ratio / sample_rate)
-
             results.append({"start": start_time, "end": end_time})
         word_idx += word_count
 
     return results
 
+
+def _align_sentences_mms_fa(
+    audio_path: str,
+    sentences: list[dict],
+    lang: str,
+) -> list[dict] | None:
+    """Align using MMS_FA with exponential trimming for long transcripts.
+
+    The acoustic model (audio → emission) runs only once. On CTC failure the
+    cheap alignment step is retried with sentences trimmed from the tail.
+    Trimmed sentences receive the last successfully aligned timestamp.
+    """
+    model, tokenizer, aligner, device, sample_rate, dictionary = (
+        _get_torchaudio_components()
+    )
+
+    try:
+        waveform = _load_audio(audio_path, sample_rate, device)
+        emission = _compute_emissions(model, waveform, device)
+    except Exception as e:
+        sys.stderr.write(
+            f"[WARN] Alignment failed for {audio_path}: {e}\n"
+            f"{traceback.format_exc()}\n"
+        )
+        return None
+
+    n = len(sentences)
+    exp_step = 1
+    max_step = 128
+    first_trim = True
+
+    while n > 0:
+        text_lines = [s.get("text", "").replace("\n", " ") for s in sentences[:n]]
+        try:
+            segments = _align_text_to_emission(
+                emission, waveform, text_lines,
+                sample_rate, dictionary, tokenizer, aligner,
+            )
+        except RuntimeError as e:
+            if "targets length is too long" not in str(e):
+                sys.stderr.write(
+                    f"[WARN] Alignment failed for {audio_path}: {e}\n"
+                    f"{traceback.format_exc()}\n"
+                )
+                return None
+            if n <= 1:
+                sys.stderr.write(
+                    f"[WARN] Alignment failed for {audio_path}: "
+                    "cannot trim further (only 1 sentence left).\n"
+                )
+                return None
+            if first_trim:
+                n -= 1
+                first_trim = False
+            else:
+                step = min(exp_step, max_step)
+                n -= min(step, n - 1)
+                exp_step = min(step * 2, max_step)
+            continue
+
+        # Alignment succeeded for sentences[:n]. Assign last timestamp to trimmed tail.
+        aligned = update_timestamps_from_alignment(sentences[:n], segments)
+        if n < len(sentences):
+            last_time = aligned[-1]["end"]
+            for s in sentences[n:]:
+                s2 = dict(s)
+                s2["start"] = last_time
+                s2["end"] = last_time
+                aligned.append(s2)
+            sys.stderr.write(
+                f"[INFO] MMS_FA trimmed {len(sentences) - n} sentence(s) from the end "
+                f"of {os.path.basename(audio_path)} due to CTC length constraint.\n"
+            )
+        return aligned
+
+    return None
+
+
+# ── alqalign ─────────────────────────────────────────────────────────────────
+
+def _get_alq_align():
+    try:
+        from alqalign.app import align as alq_align
+        return alq_align
+    except ImportError:
+        raise ImportError(
+            "alqalign is not installed. See https://github.com/xinjli/alqalign "
+            "for installation instructions."
+        )
+
+
+def _write_temp_text(lines: list[str]) -> str:
+    """Write text lines to a temp file and return the path."""
+    fd, path = tempfile.mkstemp(suffix=".txt", prefix="chunkseg_", text=True)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        for line in lines:
+            f.write((line or "").strip() + "\n")
+    return path
+
+
+def _align_sentences_alqalign(
+    audio_path: str,
+    sentences: list[dict],
+    lang: str,
+) -> list[dict] | None:
+    """Align using alqalign with exponential trimming for long transcripts."""
+    alq_align = _get_alq_align()
+
+    remaining = list(sentences)
+    used_trim_last = False
+    exp_step = 1
+    max_step = 128
+
+    while True:
+        tmp_txt_path = None
+        try:
+            text_lines = [s.get("text", "").replace("\n", " ") for s in remaining]
+            tmp_txt_path = _write_temp_text(text_lines)
+            segments = alq_align(audio_path, tmp_txt_path, lang)
+
+            if not isinstance(segments, list) or not all(
+                isinstance(x, dict) for x in segments
+            ):
+                sys.stderr.write(
+                    "[WARN] Unexpected alqalign output; keeping original timestamps.\n"
+                )
+                return None
+
+            if len(segments) != len(remaining):
+                punct_positions = [
+                    i for i, s in enumerate(remaining)
+                    if _is_punct_only(str(s.get("text", "")))
+                ]
+
+                if (
+                    len(segments) + len(punct_positions) == len(remaining)
+                    and len(segments) > 0
+                ):
+                    keep_indices = [
+                        i for i in range(len(remaining)) if i not in punct_positions
+                    ]
+                    kept_sentences = [remaining[i] for i in keep_indices]
+                    aligned_kept = update_timestamps_from_alignment(
+                        kept_sentences, segments
+                    )
+                    aligned_map = {
+                        idx: aligned_kept[j] for j, idx in enumerate(keep_indices)
+                    }
+                    aligned_full = []
+                    prev_end = (
+                        float(aligned_kept[0].get("start", 0.0))
+                        if aligned_kept else 0.0
+                    )
+                    for i, s in enumerate(remaining):
+                        if i in aligned_map:
+                            s2 = aligned_map[i]
+                            aligned_full.append(s2)
+                            prev_end = float(s2.get("end", prev_end))
+                        else:
+                            s2 = dict(s)
+                            s2["start"] = prev_end
+                            s2["end"] = prev_end
+                            aligned_full.append(s2)
+                    return aligned_full
+
+                sys.stderr.write(
+                    f"[WARN] Segment count mismatch for {os.path.basename(audio_path)}: "
+                    f"{len(segments)} (aligned) vs {len(remaining)} (sentences).\n"
+                )
+                return None
+
+            return update_timestamps_from_alignment(remaining, segments)
+
+        except FileNotFoundError:
+            if len(remaining) <= 1:
+                return None
+
+            if not used_trim_last:
+                remaining = remaining[:-1]
+                if remaining:
+                    pivot_text = remaining[-1].get("text", "")
+                    remaining = [
+                        s for s in remaining[:-1]
+                        if s.get("text", "") != pivot_text
+                    ] + [remaining[-1]]
+                used_trim_last = True
+                if not remaining:
+                    return None
+            else:
+                step = min(exp_step, max_step)
+                trim_n = min(step, len(remaining) - 1)
+                remaining = remaining[:-trim_n]
+                exp_step = min(step * 2, max_step)
+
+        except Exception as e:
+            sys.stderr.write(
+                f"[WARN] Alignment failed for {audio_path}: {e}\n"
+                f"{traceback.format_exc()}\n"
+            )
+            return None
+
+        finally:
+            if tmp_txt_path and os.path.exists(tmp_txt_path):
+                try:
+                    os.remove(tmp_txt_path)
+                except Exception:
+                    pass
+
+
+# ── shared helpers ────────────────────────────────────────────────────────────
 
 def _is_punct_only(text: str) -> bool:
     if text is None:
@@ -185,17 +376,31 @@ def update_timestamps_from_alignment(
     return updated
 
 
+# ── public API ────────────────────────────────────────────────────────────────
+
 def align_sentences(
     audio_path: str,
     sentences: list[dict],
     lang: str,
+    backend: str = "mms_fa",
 ) -> list[dict] | None:
-    """Align sentence timestamps against an audio file using torchaudio MMS_FA.
+    """Align sentence timestamps against an audio file.
 
     Args:
         audio_path: Path to audio file (WAV, MP3, FLAC, etc.).
         sentences: List of dicts, each with at least a ``"text"`` key.
+            Sentences are typically produced by ``nltk.sent_tokenize`` via
+            the chunkseg parsers.
         lang: ISO 639-3 language code (e.g. ``"eng"``).
+        backend: Alignment backend. Options:
+
+            - ``"mms_fa"`` (default) — torchaudio MMS_FA; installed via
+              ``chunkseg[align]``. The acoustic model (audio → emission) runs
+              once; the CTC alignment step is retried with exponential trimming
+              if the transcript is too long for a single pass.
+            - ``"alqalign"`` — alqalign; see https://github.com/xinjli/alqalign
+              for installation. Full alignment (including audio processing) is
+              retried with exponential trimming on failure.
 
     Returns:
         Updated sentence dicts with ``start``/``end`` timestamps, or
@@ -204,18 +409,15 @@ def align_sentences(
     if not sentences:
         return sentences
 
-    text_lines = [s.get("text", "").replace("\n", " ") for s in sentences]
+    if backend == "alqalign":
+        return _align_sentences_alqalign(audio_path, sentences, lang)
 
-    try:
-        segments = _torchaudio_align(audio_path, text_lines, lang)
-    except Exception as e:
-        sys.stderr.write(
-            f"[WARN] Alignment failed for {audio_path}: {e}\n"
-            f"{traceback.format_exc()}\n"
+    if backend != "mms_fa":
+        raise ValueError(
+            f"Unknown FA backend: {backend!r}. Choose 'mms_fa' or 'alqalign'."
         )
-        return None
 
-    return update_timestamps_from_alignment(sentences, segments)
+    return _align_sentences_mms_fa(audio_path, sentences, lang)
 
 
 def sections_to_boundary_timestamps(

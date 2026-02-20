@@ -47,6 +47,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="ISO 639-3 language code for forced alignment (default: eng).",
     )
     p.add_argument(
+        "--fa-backend",
+        default="mms_fa",
+        choices=["mms_fa", "alqalign"],
+        help='Forced alignment backend: "mms_fa" (default, installed via '
+        'chunkseg[align]) or "alqalign" (see https://github.com/xinjli/alqalign; '
+        "includes exponential trimming for long transcripts).",
+    )
+    p.add_argument(
         "--force-alignment",
         action="store_true",
         help="Force alignment even when timestamps are embedded in transcript. "
@@ -127,6 +135,7 @@ def main(argv: list[str] | None = None) -> None:
         custom_pattern=args.custom_pattern,
         timestamp_format=args.timestamp_format,
         lang=args.lang,
+        fa_backend=args.fa_backend,
         num_bootstrap=args.num_bootstrap,
         force_alignment=args.force_alignment,
         wer=args.wer,
