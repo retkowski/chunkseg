@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chunkseg"
-version = "0.3.0"
+version = "0.3.1"
 description = "Evaluate chaptering quality for audio and video content in time space, supporting segmentation and title generation"
 readme = "README.md"
 license = {text = "MIT"}
