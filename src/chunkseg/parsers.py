@@ -118,7 +118,12 @@ def _tokenize_section(text: str) -> list[str]:
     text = text.strip()
     if not text:
         return []
-    return sent_tokenize(text)
+    try:
+        return sent_tokenize(text)
+    except LookupError:
+        import nltk
+        nltk.download("punkt_tab", quiet=True)
+        return sent_tokenize(text)
 
 
 class ParseResult(NamedTuple):
