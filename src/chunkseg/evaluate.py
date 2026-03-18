@@ -120,7 +120,7 @@ def evaluate(
         if hyp_text:
             metrics.update(compute_wer(hyp_text, reference_transcript))
 
-    # Compute BERTScore title metrics if reference titles are provided
+    # Compute title metrics (BERTScore + ROUGE-L) if reference titles are provided
     if reference_titles is not None:
         _hyp_titles = hyp_titles
         if _hyp_titles is None and isinstance(hypothesis, str):
@@ -135,6 +135,12 @@ def evaluate(
             metrics.update(compute_title_scores(
                 _hyp_titles, reference_titles, tolerance=tolerance,
             ))
+        else:
+            metrics.update({
+                "gc_bs_f1": 0.0, "gc_bs_precision": 0.0, "gc_bs_recall": 0.0,
+                "gc_rl_f1": 0.0, "gc_rl_precision": 0.0, "gc_rl_recall": 0.0,
+                "tm_matched": 0.0,
+            })
 
     return metrics
 

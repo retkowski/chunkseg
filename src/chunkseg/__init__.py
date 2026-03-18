@@ -1,6 +1,6 @@
 """chunkseg — Time-chunked segmentation evaluation."""
 
-__version__ = "0.3.2"
+__version__ = "0.3.3"
 
 from .evaluate import evaluate, evaluate_batch
 from .display import print_results
