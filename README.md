@@ -115,7 +115,7 @@ chunkseg samples.jsonl --titles --tolerance 5.0 --collar 3.0
 chunkseg samples.jsonl --wer
 
 # Structured transcript mode (forced alignment)
-chunkseg transcripts.jsonl --format cstart --lang eng
+chunkseg transcripts.jsonl --format cstart --src-lang eng
 
 # Structured transcript with embedded timestamps
 chunkseg transcripts.jsonl --format cstart_ts
@@ -248,7 +248,8 @@ Options:
   --format STR          Parser preset for transcript mode
   --custom-pattern STR  Regex for custom/custom_ts format
   --timestamp-format STR Timestamp format for custom_ts
-  --lang STR            ISO 639-3 language code for alignment (default: eng)
+  --src-lang STR        ISO 639-3 language code for alignment (default: eng)
+  --tgt-lang STR        ISO 639-1 language code for title BERTScore (default: en)
   --force-alignment     Derive timestamps from audio alignment
   --wer                 Compute WER (requires reference_transcript field)
   --titles              Compute title metrics (requires reference_titles field)

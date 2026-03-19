@@ -42,9 +42,14 @@ def _build_parser() -> argparse.ArgumentParser:
         '"M:SS", or a custom regex with named groups h/m/s.',
     )
     p.add_argument(
-        "--lang",
+        "--src-lang",
         default="eng",
         help="ISO 639-3 language code for forced alignment (default: eng).",
+    )
+    p.add_argument(
+        "--tgt-lang",
+        default="en",
+        help="ISO 639-1 language code for BERTScore title evaluation (default: en).",
     )
     p.add_argument(
         "--fa-backend",
@@ -134,7 +139,8 @@ def main(argv: list[str] | None = None) -> None:
         format=args.format,
         custom_pattern=args.custom_pattern,
         timestamp_format=args.timestamp_format,
-        lang=args.lang,
+        src_lang=args.src_lang,
+        tgt_lang=args.tgt_lang,
         fa_backend=args.fa_backend,
         num_bootstrap=args.num_bootstrap,
         force_alignment=args.force_alignment,

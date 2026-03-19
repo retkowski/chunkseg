@@ -19,7 +19,8 @@ def evaluate(
     format: str | None = None,
     custom_pattern: str | None = None,
     timestamp_format: str | None = None,
-    lang: str = "eng",
+    src_lang: str = "eng",
+    tgt_lang: str = "en",
     fa_backend: str = "mms_fa",
     force_alignment: bool = False,
     reference_transcript: str | None = None,
@@ -59,7 +60,9 @@ def evaluate(
         timestamp_format: Timestamp format for ``"custom_ts"`` (default: ``"H:MM:SS"``).
             Supported: ``"HH:MM:SS"``, ``"H:MM:SS"``, ``"MM:SS"``, ``"M:SS"``, or
             a custom regex with named groups ``h``/``m``/``s``.
-        lang: ISO 639-3 language code for forced alignment (default ``"eng"``).
+        src_lang: ISO 639-3 language code for forced alignment (default ``"eng"``).
+        tgt_lang: ISO 639-1 language code for BERTScore title evaluation
+            (default ``"en"``).
         fa_backend: Forced alignment backend: ``"mms_fa"`` (default, requires
             ``chunkseg[align]``) or ``"alqalign"`` (see
             https://github.com/xinjli/alqalign; includes exponential trimming
@@ -86,7 +89,7 @@ def evaluate(
         hyp_timestamps = _timestamps_from_transcript(
             hypothesis, audio=audio, format=format,
             custom_pattern=custom_pattern, timestamp_format=timestamp_format,
-            lang=lang, fa_backend=fa_backend, force_alignment=force_alignment,
+            lang=src_lang, fa_backend=fa_backend, force_alignment=force_alignment,
         )
     else:
         hyp_timestamps = list(hypothesis)
@@ -133,7 +136,7 @@ def evaluate(
         if _hyp_titles:
             from .titles import compute_title_scores
             metrics.update(compute_title_scores(
-                _hyp_titles, reference_titles, tolerance=tolerance,
+                _hyp_titles, reference_titles, tolerance=tolerance, lang=tgt_lang,
             ))
         else:
             metrics.update({
@@ -152,7 +155,8 @@ def evaluate_batch(
     format: str | None = None,
     custom_pattern: str | None = None,
     timestamp_format: str | None = None,
-    lang: str = "eng",
+    src_lang: str = "eng",
+    tgt_lang: str = "en",
     fa_backend: str = "mms_fa",
     num_bootstrap: int = 100,
     force_alignment: bool = False,
@@ -177,7 +181,9 @@ def evaluate_batch(
         format: Parser preset override (applied to all transcript samples).
         custom_pattern: Regex pattern when *format* is ``"custom"`` or ``"custom_ts"``.
         timestamp_format: Timestamp format for ``"custom_ts"`` (default: ``"H:MM:SS"``).
-        lang: ISO 639-3 language code for forced alignment (default ``"eng"``).
+        src_lang: ISO 639-3 language code for forced alignment (default ``"eng"``).
+        tgt_lang: ISO 639-1 language code for BERTScore title evaluation
+            (default ``"en"``).
         fa_backend: Forced alignment backend: ``"mms_fa"`` (default) or
             ``"alqalign"`` (see https://github.com/xinjli/alqalign; includes trimming).
         num_bootstrap: Number of bootstrap iterations for CIs.
@@ -222,7 +228,8 @@ def evaluate_batch(
             format=sample_format,
             custom_pattern=custom_pattern,
             timestamp_format=timestamp_format,
-            lang=lang,
+            src_lang=src_lang,
+            tgt_lang=tgt_lang,
             fa_backend=fa_backend,
             force_alignment=force_alignment,
             reference_transcript=ref_transcript,

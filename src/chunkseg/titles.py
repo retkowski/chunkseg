@@ -12,18 +12,20 @@ Two scoring modes:
 from __future__ import annotations
 
 _bert_scorer = None
+_bert_scorer_lang = None
 _rouge_scorer = None
 
 
 def _get_bert_scorer(lang: str = "en"):
-    """Return a cached BERTScorer instance (loaded once)."""
-    global _bert_scorer
-    if _bert_scorer is None:
+    """Return a cached BERTScorer instance, re-created if lang changes."""
+    global _bert_scorer, _bert_scorer_lang
+    if _bert_scorer is None or _bert_scorer_lang != lang:
         import torch
         from bert_score import BERTScorer
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         _bert_scorer = BERTScorer(lang=lang, device=device)
+        _bert_scorer_lang = lang
     return _bert_scorer
 
 
