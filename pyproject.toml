@@ -34,7 +34,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-align = ["torch>=2.1.0", "torchaudio>=2.1.0"]
+align = ["torch>=2.1.0", "torchaudio>=2.1.0", "soundfile"]
 titles = ["bert-score", "rouge-score"]
 
 [project.urls]
