@@ -17,13 +17,20 @@ _rouge_scorer = None
 
 
 def _get_bert_scorer(lang: str = "en"):
-    """Return a cached BERTScorer instance, re-created if lang changes."""
+    """Return a cached BERTScorer instance, re-created if lang changes.
+
+    Device selection honors ``CHUNKSEG_BERTSCORE_DEVICE`` (e.g. ``cuda:1``);
+    otherwise falls back to ``cuda`` if available, else ``cpu``.
+    """
     global _bert_scorer, _bert_scorer_lang
     if _bert_scorer is None or _bert_scorer_lang != lang:
+        import os
         import torch
         from bert_score import BERTScorer
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = os.environ.get("CHUNKSEG_BERTSCORE_DEVICE")
+        if not device:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
         _bert_scorer = BERTScorer(lang=lang, device=device)
         _bert_scorer_lang = lang
     return _bert_scorer
@@ -55,32 +62,43 @@ def _match_titles_by_time(
     hyp_titles: list[tuple[str, float]],
     ref_titles: list[tuple[str, float]],
     tolerance: float,
+    duration: float,
 ) -> tuple[list[str], list[str]]:
-    """Greedy 1-to-1 matching of titles by start time within tolerance.
+    """Greedy 1-to-1 matching of chapters where both start and end agree within tolerance.
 
-    For each reference title, find the closest hypothesis title whose start
-    time is within *tolerance* seconds.  Each hypothesis title is used at most
-    once.
+    Each chapter's end time is the next chapter's start time, or *duration* for
+    the last chapter. A reference chapter (ts, te) is matched to a hypothesis
+    chapter (ts_hat, te_hat) if |ts_hat - ts| <= tolerance AND
+    |te_hat - te| <= tolerance.
 
     Returns:
         Tuple of (matched_hyp_texts, matched_ref_texts).
     """
+    def _with_ends(titles):
+        starts = [s for _, s in titles]
+        ends = starts[1:] + [duration]
+        return [(t, s, e) for (t, s), e in zip(titles, ends)]
+
+    hyp_intervals = _with_ends(hyp_titles)
+    ref_intervals = _with_ends(ref_titles)
+
     used_hyp: set[int] = set()
     matched_hyp: list[str] = []
     matched_ref: list[str] = []
 
-    for ref_title, ref_time in ref_titles:
+    for ref_title, ref_start, ref_end in ref_intervals:
         best_idx: int | None = None
         best_dist = float("inf")
-        for i, (_, hyp_time) in enumerate(hyp_titles):
+        for i, (_, hyp_start, hyp_end) in enumerate(hyp_intervals):
             if i in used_hyp:
                 continue
-            dist = abs(hyp_time - ref_time)
-            if dist <= tolerance and dist < best_dist:
+            ds = abs(hyp_start - ref_start)
+            de = abs(hyp_end - ref_end)
+            if ds <= tolerance and de <= tolerance and (ds + de) < best_dist:
                 best_idx = i
-                best_dist = dist
+                best_dist = ds + de
         if best_idx is not None:
-            matched_hyp.append(hyp_titles[best_idx][0])
+            matched_hyp.append(hyp_intervals[best_idx][0])
             matched_ref.append(ref_title)
             used_hyp.add(best_idx)
 
@@ -90,6 +108,7 @@ def _match_titles_by_time(
 def compute_title_scores(
     hyp_titles: list[tuple[str, float]],
     ref_titles: list[tuple[str, float]],
+    duration: float,
     tolerance: float = 5.0,
     lang: str = "en",
 ) -> dict:
@@ -98,8 +117,10 @@ def compute_title_scores(
     Args:
         hyp_titles: Hypothesis titles as ``(title_text, start_seconds)`` pairs.
         ref_titles: Reference titles as ``(title_text, start_seconds)`` pairs.
-        tolerance: Maximum time difference in seconds for TM-BS matching
-            (default 5.0).
+        duration: Total duration in seconds; used to compute the end of the
+            last chapter for TM matching.
+        tolerance: Maximum time difference in seconds for TM matching on both
+            start and end boundaries (default 5.0).
         lang: Language code for BERTScore (default ``"en"``).
 
     Returns:
@@ -111,7 +132,7 @@ def compute_title_scores(
 
     # --- Temporally Matched ---
     matched_hyp, matched_ref = _match_titles_by_time(
-        hyp_titles, ref_titles, tolerance,
+        hyp_titles, ref_titles, tolerance, duration,
     )
     if matched_hyp and matched_ref:
         # BERTScore

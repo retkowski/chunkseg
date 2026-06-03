@@ -46,7 +46,7 @@ Chapter title quality is measured in two modes, both supporting BERTScore (BS) a
 
 | Mode | Description |
 |------|-------------|
-| **TM-BS / TM-RL** | *Temporally Matched* — pair hyp/ref titles by start time within a tolerance window, score matched pairs only |
+| **TM-BS / TM-RL** | *Temporally Matched* — pair hyp/ref chapters when both start and end times agree within a tolerance window, score matched pairs only |
 | **GC-BS / GC-RL** | *Global Concatenation* — join all titles with `\n`, compute a single score on the two concatenated strings |
 | **tm_matched** | Fraction of reference titles that were matched (0–1) |
 

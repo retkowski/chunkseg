@@ -43,7 +43,12 @@ def _get_torchaudio_components():
             "are not installed. Install them with: pip install torch torchaudio"
         )
 
-    _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # Device override via env (e.g. CHUNKSEG_FA_DEVICE=cuda:1)
+    _fa_device_env = os.environ.get("CHUNKSEG_FA_DEVICE")
+    if _fa_device_env:
+        _device = torch.device(_fa_device_env)
+    else:
+        _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     _sample_rate = bundle.sample_rate  # 16000
     _model = bundle.get_model().to(_device)
     _model.eval()

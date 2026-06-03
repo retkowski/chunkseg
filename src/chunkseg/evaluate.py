@@ -136,7 +136,8 @@ def evaluate(
         if _hyp_titles:
             from .titles import compute_title_scores
             metrics.update(compute_title_scores(
-                _hyp_titles, reference_titles, tolerance=tolerance, lang=tgt_lang,
+                _hyp_titles, reference_titles, duration=duration,
+                tolerance=tolerance, lang=tgt_lang,
             ))
         else:
             metrics.update({
