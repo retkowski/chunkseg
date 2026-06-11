@@ -1,10 +1,13 @@
 # chunkseg
 
+[![arXiv](https://img.shields.io/badge/arXiv-2602.08979-b31b1b.svg)](https://arxiv.org/abs/2602.08979)
+[![PyPI](https://img.shields.io/badge/pypi-chunkseg%200.4.0-blue.svg)](https://pypi.org/project/chunkseg/)
+
 A Python package for **comprehensive evaluation of segmentation (chaptering) quality** in audio and video content. Chunkseg implements three complementary evaluation protocols introduced in *Beyond Transcripts: A Renewed Perspective on Audio Chaptering* ([arXiv:2602.08979](https://arxiv.org/abs/2602.08979)):
 
-1. **Discretized time evaluation** — Convert boundaries to fixed-size time chunks and apply established text segmentation metrics (Pk, WindowDiff, Boundary Similarity, GHD) plus binary classification metrics (F1, precision, recall).
-2. **Continuous time evaluation** — Collar-based boundary F1 that matches predicted and reference boundaries within a time tolerance window (default ±3 s).
-3. **Title evaluation** — BERTScore- and ROUGE-L-based comparison of chapter titles in two modes: *Temporally Matched* (TM) and *Global Concatenation* (GC).
+1. **[Discretized time evaluation](#1-discretized-time-time-chunks)** — Convert boundaries to fixed-size time chunks and apply established text segmentation metrics (Pk, WindowDiff, Boundary Similarity, GHD) plus binary classification metrics (F1, precision, recall).
+2. **[Continuous time evaluation](#2-continuous-time-collar-based-f1)** — Collar-based boundary F1 that matches predicted and reference boundaries within a time tolerance window (default ±3 s).
+3. **[Title evaluation](#3-title-evaluation)** — BERTScore- and ROUGE-L-based comparison of chapter titles in two modes: *Temporally Matched* (TM) and *Global Concatenation* (GC).
 
 By evaluating in the time domain rather than the text domain, chunkseg is **transcript-invariant** and enables comparisons across models that produce very different output formats.
 
@@ -25,6 +28,21 @@ For **forced alignment** from structured transcripts without timestamps:
 ```bash
 pip install "chunkseg[align]"
 ```
+
+## Overview
+
+- [Evaluation Protocols](#evaluation-protocols)
+- [Usage](#usage)
+  - [Python API](#python-api)
+  - [CLI](#cli)
+  - [Input Format](#input-format)
+  - [Input Modes](#input-modes)
+  - [Parser Presets](#parser-presets)
+  - [Metrics](#metrics)
+  - [CLI Reference](#cli-reference)
+- [Dependencies](#dependencies)
+- [Citation](#citation)
+- [License](#license)
 
 ## Evaluation Protocols
 
@@ -124,17 +142,17 @@ chunkseg transcripts.jsonl --format cstart_ts
 chunkseg samples.jsonl --titles --output results.json
 ```
 
-## Input Format
+### Input Format
 
 Each line of the input JSONL file must be a JSON object. The required fields depend on the evaluation mode.
 
-### Timestamps mode (minimal)
+#### Timestamps mode (minimal)
 
 ```json
 {"hypothesis": [24.2, 33.94], "reference": [11.0, 23.0, 34.0], "duration": 50.0}
 ```
 
-### With title evaluation
+#### With title evaluation
 
 ```json
 {
@@ -149,7 +167,7 @@ Each line of the input JSONL file must be a JSON object. The required fields dep
 }
 ```
 
-### Structured transcript (forced alignment)
+#### Structured transcript (forced alignment)
 
 ```json
 {
@@ -160,7 +178,7 @@ Each line of the input JSONL file must be a JSON object. The required fields dep
 }
 ```
 
-### All fields
+#### All fields
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -172,7 +190,7 @@ Each line of the input JSONL file must be a JSON object. The required fields dep
 | `hyp_titles` | `[[title, seconds], ...]` | Optional | Predicted titles (inferred from transcript if omitted) |
 | `reference_transcript` | `str` | For `--wer` | Reference transcript text |
 
-## Input Modes
+### Input Modes
 
 | Mode | `hypothesis` type | Audio? | Notes |
 |------|------------------|--------|-------|
@@ -181,7 +199,7 @@ Each line of the input JSONL file must be a JSON object. The required fields dep
 | Transcript + timestamps (use provided) | `str` | No | `format="cstart_ts"` etc. |
 | Transcript + timestamps (force alignment) | `str` | Yes | `format="cstart_ts"`, `force_alignment=True` |
 
-## Parser Presets
+### Parser Presets
 
 | Preset | Format | Timestamps? |
 |--------|--------|-------------|
@@ -193,9 +211,9 @@ Each line of the input JSONL file must be a JSON object. The required fields dep
 | `custom` | User-provided regex | No |
 | `custom_ts` | User-provided regex with `(?P<timestamp>...)` | Yes |
 
-## Metrics
+### Metrics
 
-### Discretized Time (Time-Chunks)
+#### Discretized Time (Time-Chunks)
 
 | Metric | Description |
 |--------|-------------|
@@ -209,7 +227,7 @@ Each line of the input JSONL file must be a JSON object. The required fields dep
 | `boundary_similarity` | Boundary similarity score |
 | `ghd` | Generalized Hamming Distance |
 
-### Continuous Time (Collar-Based)
+#### Continuous Time (Collar-Based)
 
 | Metric | Description |
 |--------|-------------|
@@ -217,7 +235,7 @@ Each line of the input JSONL file must be a JSON object. The required fields dep
 | `collar_precision` | Precision within collar |
 | `collar_recall` | Recall within collar |
 
-### Title Evaluation
+#### Title Evaluation
 
 | Metric | Description |
 |--------|-------------|
@@ -237,7 +255,7 @@ Each line of the input JSONL file must be a JSON object. The required fields dep
 
 All scalar metrics are reported as `{mean, std, ci_lower, ci_upper}` with bootstrap confidence intervals (default 100 iterations, configurable via `--num-bootstrap`).
 
-## CLI Reference
+### CLI Reference
 
 ```
 chunkseg <input.jsonl> [options]
